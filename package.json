@@ -1,0 +1,21 @@
+{
+  "name": "clockwork-creators",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Clockwork Creator Programme service: sign-up, qualification, attribution, statements",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/server.js",
+    "migrate": "node src/migrate.js",
+    "test": "node --test test/",
+    "job": "node src/jobs/run.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.13.1",
+    "cookie-parser": "^1.4.7",
+    "express-rate-limit": "^7.5.0",
+    "node-cron": "^3.0.3"
+  }
+}

@@ -1,6 +1,9 @@
 import pg from 'pg';
 import { config } from './config.js';
 
+// BIGINT (paise) as JS numbers. Safe: paise totals stay far below 2^53.
+pg.types.setTypeParser(20, (v) => (v === null ? null : Number(v)));
+
 export const pool = new pg.Pool({
   connectionString: config.databaseUrl,
   ssl: config.databaseUrl.includes('localhost') || config.databaseUrl.includes('127.0.0.1') ? false : { rejectUnauthorized: false },

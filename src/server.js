@@ -21,15 +21,32 @@ app.use((req, res, next) => {
   res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
   next();
 });
+// The creator pages live on clockworkrituals.com (and Shopify theme previews); only those origins may call the API.
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'https://www.clockworkrituals.com,https://clockworkrituals.com').split(',').map((s) => s.trim());
+const allowedOrigin = (o) => o && (allowedOrigins.includes(o) || /^https:\/\/[a-z0-9-]+\.(myshopify\.com|shopifypreview\.com)$/.test(o));
+app.use('/api', (req, res, next) => {
+  const origin = req.get('Origin');
+  if (allowedOrigin(origin)) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Max-Age', '600');
+  }
+  if (req.method === 'OPTIONS') return res.sendStatus(allowedOrigin(origin) ? 204 : 403);
+  next();
+});
 app.use(webhooks); // before any body parser: needs the raw body
 app.use(cookieParser());
 app.get('/health', (req, res) => res.json({ ok: true, dryRun: config.dryRun }));
 app.use(join);
 app.use(dashboard);
+app.use('/api', (req, res) => res.status(404).json({ error: 'not_found' }));
 app.use((req, res) => res.status(404).send(page('Not found', '<h1>Page not found</h1><p><a href="/">Back to the start</a></p>')));
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   console.error(err);
+  if (req.path.startsWith('/api/')) return res.status(500).json({ error: 'server_error' });
   res.status(500).send(page('Something went wrong', '<h1>Something went wrong</h1><p>Please try again in a few minutes. If it keeps happening, write to partners@clockworkrituals.com.</p>'));
 });
 

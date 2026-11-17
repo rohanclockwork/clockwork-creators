@@ -98,7 +98,7 @@ export async function activate(creatorId) {
     }
   }
 
-  const dashboard = `${config.baseUrl}/login?t=${sign({ cid: c.id, k: 'login' }, 15 * 60)}`;
+  const dashboard = `${config.storeUrl}/pages/creator-dashboard`;
   await emails.welcome(updated.email, {
     name: updated.name, code, links: creatorLinks(code), dashboard, spotlight: updated.level === 'spotlight',
   });

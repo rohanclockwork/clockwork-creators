@@ -20,7 +20,7 @@ function layout(title, bodyHtml) {
 
 const button = (href, label) => `<p style="margin:24px 0"><a href="${esc(href)}" style="background:#0B0D0C;color:#ffffff;padding:12px 20px;border-radius:6px;text-decoration:none;display:inline-block">${esc(label)}</a></p>`;
 
-export async function send({ to, subject, title, html }) {
+export async function send({ to, subject, title, html, attachments }) {
   if (!config.email.resendKey) {
     console.log(`[email not sent: RESEND_API_KEY missing] to=${to} subject=${subject}`);
     return { skipped: true };
@@ -28,7 +28,8 @@ export async function send({ to, subject, title, html }) {
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${config.email.resendKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from: config.email.from, to: [to], reply_to: config.email.replyTo, subject, html: layout(title || subject, html) }),
+    body: JSON.stringify({ from: config.email.from, to: [to], reply_to: config.email.replyTo, subject, html: layout(title || subject, html),
+      ...(attachments ? { attachments: attachments.map((a) => ({ filename: a.filename, content: Buffer.from(a.content).toString('base64') })) } : {}) }),
   });
   if (!res.ok) throw new Error(`Resend: ${res.status} ${await res.text()}`);
   return res.json();
@@ -56,7 +57,7 @@ ${CLAIMS}${button(dashboard, 'Open your dashboard')}<p>Orders count once deliver
   magicLink: (to, link) => send({ to, subject: 'Your Clockwork Creators sign-in link', title: 'Sign in',
     html: `${button(link, 'Open my dashboard')}<p>This link works for 15 minutes. If you did not ask for it, you can ignore this email.</p>` }),
 
-  statement: (to, { name, periodLabel, rows, gross, adjustments, carryIn, tds, net, carryOut, dryRun }) => send({ to,
+  statement: (to, { name, periodLabel, rows, gross, adjustments, carryIn, tds, net, carryOut, dryRun, testMode }) => send({ to,
     subject: `Your Clockwork statement, ${periodLabel}`, title: `Statement, ${periodLabel}`,
     html: `<p>Hello ${esc(name)}, here is your statement.</p>
 <table width="100%" cellpadding="6" style="border-collapse:collapse;font-size:14px">
@@ -65,7 +66,7 @@ ${rows.map((r) => `<tr style="border-bottom:1px solid #eee"><td>${esc(r.order_na
 </table>
 <p>Earned: ${rupees(gross)}<br>Adjustments: ${rupees(adjustments)}<br>Brought forward: ${rupees(carryIn)}<br>Tax deducted at source: ${rupees(tds)}<br><strong>${carryOut ? 'Carried forward' : 'Paid to you'}: ${rupees(carryOut || net)}</strong></p>
 ${carryOut ? '<p>Balances under ₹500 carry forward to your next statement.</p>' : ''}
-${dryRun ? '<p style="color:#5b6360">This statement was calculated during our test period. No payment has been sent yet; payments start once the programme opens.</p>' : ''}` }),
+${dryRun || testMode ? '<p style="color:#5b6360">Test statement: no money has been sent.</p>' : carryOut ? '' : '<p>Your payment is on its way to your registered account. Bank transfers usually arrive within a few hours.</p>'}` }),
 
   postProblem: (to, { permalink, problems }) => send({ to, subject: 'A Clockwork post needs a change', title: 'One of your posts needs a change',
     html: `<p>We checked ${esc(permalink)} and found:</p><ul>${problems.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>
@@ -81,4 +82,14 @@ ${dryRun ? '<p style="color:#5b6360">This statement was calculated during our te
     html: `<p>Hello ${esc(name)}. From the 1st of this month your tier is ${esc(tierLabel)}. It applies to orders placed from that day.</p>` }),
 
   ownerDigest: (subject, html) => send({ to: config.email.ownerDigest, subject, title: subject, html }),
+
+  ownerDigestWithAttachment: (subject, html, attachment) => send({ to: config.email.ownerDigest, subject, title: subject, html, attachments: [attachment] }),
+
+  payoutFailed: (to, { name, reason }) => send({ to, subject: 'We could not pay you this week', title: 'Your payment did not go through',
+    html: `<p>Hello ${esc(name)}. Your payment was returned by the bank: ${esc(reason || 'the account details were not accepted')}. The amount is safe and carried forward.</p>
+<p>Please write to partners@clockworkrituals.com from your registered email with your correct UPI ID or bank account, and we will pay it in the next run.</p>` }),
+
+  payoutDetailsChanged: (to, { name, last4 }) => send({ to, subject: 'Your Clockwork payout details were changed', title: 'Payout details changed',
+    html: `<p>Hello ${esc(name)}. Your payout account was changed to one ending ${esc(last4)}. For your security, we wait 72 hours before paying to a new account.</p>
+<p>If you did not make this change, reply to this email straight away.</p>` }),
 };

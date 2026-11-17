@@ -6,6 +6,8 @@ import { page, esc, rupees } from '../views/html.js';
 import { sign, verify, normaliseEmail, hashId } from '../lib/crypto.js';
 import { emails } from '../integrations/email.js';
 import { creatorLinks } from '../integrations/shopify.js';
+import { isValidIfsc, isValidVpa } from '../lib/rules.js';
+import { changePayoutDetails } from '../services/payouts.js';
 
 export const dashboard = express.Router();
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false });
@@ -97,7 +99,8 @@ ${payouts.map((p) => `<tr><td>${esc(p.run_id)}</td><td>${p.status === 'dry_run' 
 </table></div>
 <h2>Your details</h2>
 <div class="card">PAN ending ${esc(c.pan_last4)} · ${c.payout_method === 'bank' ? 'Bank account' : 'UPI'} ending ${esc(c.payout_last4)}<br>
-<span class="hint">To change payout details, write to partners@clockworkrituals.com from your registered email.</span></div>
+${c.payout_hold_until && new Date(c.payout_hold_until) > new Date() ? `<br><span class="hint">Payments to this account start after ${new Date(c.payout_hold_until) > new Date(Date.now() + 365 * 86400000) ? 'you update your details' : new Date(c.payout_hold_until).toLocaleString('en-GB', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}.</span>` : ''}
+<p><a href="/payout-details">Change payout details</a></p></div>
 <form method="post" action="/logout"><button class="btn mint" type="submit">Sign out</button></form>`, { narrow: false }));
   } catch (e) { next(e); }
 });
@@ -111,5 +114,48 @@ dashboard.get('/go/:code', async (req, res, next) => {
     await q('INSERT INTO clicks (creator_id, ip_hash, ua, referer, landing) VALUES ($1,$2,$3,$4,$5)',
       [c.id, hashId(req.ip), String(req.get('user-agent') || '').slice(0, 300), String(req.get('referer') || '').slice(0, 300), 'daily']);
     res.redirect(302, creatorLinks(c.code).daily);
+  } catch (e) { next(e); }
+});
+
+function payoutForm(errors = []) {
+  return page('Payout details', `<h1>Change payout details</h1>
+${errors.length ? `<div class="err">${errors.map(esc).join('<br>')}</div>` : ''}
+<p>For your security we email you about the change and wait 72 hours before paying to a new account.</p>
+<form method="post" action="/payout-details"><input type="hidden" name="csrf" value="__CSRF__">
+<label>Payout method</label><select name="payout_method"><option value="upi">UPI</option><option value="bank">Bank account</option></select>
+<label>UPI ID (if UPI)</label><input type="text" name="vpa">
+<label>Bank account number (if bank)</label><input type="text" name="account">
+<label>IFSC (if bank)</label><input type="text" name="ifsc">
+<p><button class="btn" type="submit">Save</button> <a href="/dashboard">Cancel</a></p></form>`);
+}
+
+dashboard.get('/payout-details', async (req, res, next) => {
+  try {
+    const c = await currentCreator(req);
+    if (!c) return res.redirect('/login');
+    res.send(payoutForm().replace('__CSRF__', esc(sign({ cid: c.id, k: 'csrf-payout' }, 3600))));
+  } catch (e) { next(e); }
+});
+
+dashboard.post('/payout-details', limiter, express.urlencoded({ extended: false }), async (req, res, next) => {
+  try {
+    const c = await currentCreator(req);
+    if (!c) return res.redirect('/login');
+    const t = verify(req.body.csrf);
+    if (!t || t.cid !== c.id || t.k !== 'csrf-payout') return res.status(400).send(page('Error', '<h1>Please try again</h1>'));
+    let payout;
+    if (req.body.payout_method === 'bank') {
+      const account = String(req.body.account || '').replace(/\s/g, '');
+      const ifsc = String(req.body.ifsc || '').toUpperCase().trim();
+      if (!/^\d{9,18}$/.test(account) || !isValidIfsc(ifsc)) return res.status(400).send(payoutForm(['Enter a valid bank account number and IFSC.']).replace('__CSRF__', esc(req.body.csrf)));
+      payout = { method: 'bank', account, ifsc, key: `${account}@${ifsc}`, last4: account.slice(-4) };
+    } else {
+      const vpa = String(req.body.vpa || '').trim().toLowerCase();
+      if (!isValidVpa(vpa)) return res.status(400).send(payoutForm(['Enter a valid UPI ID, for example name@okhdfcbank.']).replace('__CSRF__', esc(req.body.csrf)));
+      payout = { method: 'upi', vpa, key: vpa, last4: vpa.split('@')[0].slice(-4) };
+    }
+    const r = await changePayoutDetails(c, payout);
+    if (!r.ok) return res.status(400).send(payoutForm([r.reason]).replace('__CSRF__', esc(req.body.csrf)));
+    res.redirect('/dashboard');
   } catch (e) { next(e); }
 });

@@ -7,6 +7,8 @@ import { qualify } from '../lib/qualify.js';
 import { nextTier, fraudSignals, repeatCheck, tdsFor, financialYear } from '../lib/rules.js';
 import { decrypt, encrypt } from '../lib/crypto.js';
 import { emails, rupees } from '../integrations/email.js';
+import * as rzp from '../integrations/razorpayx.js';
+import { setupFundAccount } from '../services/payouts.js';
 
 const DAY = 86400000;
 const log = (...a) => console.log(new Date().toISOString(), ...a);
@@ -178,53 +180,161 @@ function runIdFor(now, weekly) {
 
 /**
  * Payout run. Weekly during the campaign, monthly (5th) after.
- * Phase 1: DRY_RUN only. Statements are calculated and emailed; no money moves and nothing is marked paid.
+ * Three modes:
+ *  - DRY_RUN=true: statements calculated and emailed to Rohan only. Nothing is marked paid, no money moves.
+ *  - DRY_RUN=false with RazorpayX test keys: the full flow against RazorpayX test mode (run IDs start "test-").
+ *  - DRY_RUN=false with live keys: real payouts. Each payout's reference and idempotency key is "<runId>-<creatorId>",
+ *    and a run for a period that already exists is refused, so nobody is paid twice.
  */
+// Runs of the same kind only: live runs never mix with test- or dry- runs.
+const familySql = (param) => `(CASE WHEN ${param}::text = '' THEN run_id NOT LIKE 'dry-%' AND run_id NOT LIKE 'test-%' ELSE run_id LIKE ${param}::text || '%' END)`;
+
 export async function payoutRun(now = new Date(), { force = false } = {}) {
-  if (!config.dryRun) throw new Error('Live payouts arrive in phase 2 (RazorpayX). Keep DRY_RUN=true until then.');
+  const live = !config.dryRun;
+  if (live && !rzp.configured()) throw new Error('DRY_RUN is off but RazorpayX keys or account number are missing.');
+  const testMode = live && rzp.isTestMode();
+  const family = !live ? 'dry-' : testMode ? 'test-' : '';
   const campaignOn = now <= new Date(config.commission.campaignEndsAt);
   const weekly = campaignOn && config.payouts.weeklyDuringCampaign;
-  const runId = `dry-${runIdFor(now, weekly)}`;
+  const period = runIdFor(now, weekly);
+  const runId = `${family}${period}`;
   const exists = await q('SELECT 1 FROM payout_runs WHERE run_id=$1', [runId]);
-  if (exists.rowCount && !force) return { refused: true, runId, message: 'A run for this period already exists. Never pay twice.' };
-  if (force) { await q('DELETE FROM payouts WHERE run_id=$1', [runId]); await q('DELETE FROM payout_runs WHERE run_id=$1', [runId]); }
-  await q('INSERT INTO payout_runs (run_id, period_start, period_end, dry_run) VALUES ($1, now() - interval \'7 days\', now(), true)', [runId]);
+  if (exists.rowCount && !(force && !live)) return { refused: true, runId, message: 'A run for this period already exists. Never pay twice.' };
+  if (exists.rowCount) { await q('DELETE FROM payouts WHERE run_id=$1', [runId]); await q('DELETE FROM payout_runs WHERE run_id=$1', [runId]); }
+  await q(`INSERT INTO payout_runs (run_id, period_start, period_end, dry_run, test_mode) VALUES ($1, now() - interval '7 days', now(), $2, $3)`, [runId, !live, testMode]);
 
-  const totals = { creators: 0, gross: 0, tds: 0, net: 0, carried: 0, failures: 0 };
+  const totals = { creators: 0, gross: 0, tds: 0, paid: 0, carried: 0, held: 0, failures: 0 };
   const lines = [];
   const creators = (await q(`SELECT * FROM creators WHERE status IN ('active','paused')`)).rows;
   const fy = financialYear(now);
+  const label = new Date(now.getTime() + 5.5 * 3600000).toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+
   for (const c of creators) {
     try {
       await applyChecks(c, now);
+      if (live && !c.rzp_fund_account_id && c.payout_enc) {
+        try { const r = await setupFundAccount(c); if (r.fundAccountId) c.rzp_fund_account_id = r.fundAccountId; } catch (e) { log(`fund account retry failed for ${c.id}: ${e.message}`); }
+      }
       const postHold = (await q('SELECT 1 FROM post_checks WHERE creator_id=$1 AND ok=false', [c.id])).rowCount > 0;
       const rows = postHold ? [] : (await q(
-        `SELECT order_name, basis, rate_bps, commission_paise FROM attributions
+        `SELECT order_id, order_name, basis, rate_bps, commission_paise FROM attributions
          WHERE creator_id=$1 AND state='locked' AND paid_in_payout_id IS NULL ORDER BY placed_at`, [c.id])).rows;
       const gross = rows.reduce((s, r) => s + Number(r.commission_paise), 0);
-      const adjustments = Number((await q(`SELECT coalesce(sum(amount_paise),0)::bigint AS s FROM adjustments WHERE creator_id=$1 AND applied_in_payout_id IS NULL AND written_off_at IS NULL`, [c.id])).rows[0].s);
-      const prior = (await q(`SELECT coalesce(sum(gross_paise),0)::bigint AS g, coalesce(sum(tds_paise),0)::bigint AS t FROM payouts WHERE creator_id=$1 AND fy=$2 AND status <> 'dry_run'`, [c.id, fy])).rows[0];
+      const adj = (await q(`SELECT id, amount_paise FROM adjustments WHERE creator_id=$1 AND applied_in_payout_id IS NULL AND written_off_at IS NULL`, [c.id])).rows;
+      const adjustments = adj.reduce((s, a) => s + Number(a.amount_paise), 0);
+      const carryIn = live ? Number((await q(
+        `SELECT carry_out_paise FROM payouts WHERE creator_id=$1 AND ${familySql('$2')} AND status NOT IN ('dry_run','failed') ORDER BY created_at DESC LIMIT 1`,
+        [c.id, family])).rows[0]?.carry_out_paise || 0) : 0;
+      if (!gross && !adjustments && !carryIn) continue;
+
+      const prior = (await q(`SELECT coalesce(sum(gross_paise),0)::bigint AS g, coalesce(sum(tds_paise),0)::bigint AS t FROM payouts
+                              WHERE creator_id=$1 AND fy=$2 AND status NOT IN ('dry_run','failed') AND ${familySql('$3')}`, [c.id, fy, family])).rows[0];
       const tds = tdsFor({ creditedBeforePaise: Number(prior.g), tdsBeforePaise: Number(prior.t), grossNowPaise: gross, hasValidPan: Boolean(c.pan_enc), cfg: config.tds });
-      const net = gross + adjustments - tds;
-      const carryOut = net < config.payouts.minPayoutPaise ? net : 0;
-      if (!gross && !adjustments) continue;
-      await q(`INSERT INTO payouts (run_id, creator_id, gross_paise, adjustments_paise, carry_in_paise, tds_paise, net_paise, carry_out_paise, status, fy)
-               VALUES ($1,$2,$3,$4,0,$5,$6,$7,'dry_run',$8)`, [runId, c.id, gross, adjustments, tds, net, carryOut, fy]);
-      totals.creators++; totals.gross += gross; totals.tds += tds; totals.net += carryOut ? 0 : net; totals.carried += carryOut;
-      // DRY_RUN: creators get nothing; Rohan gets every statement to review before switching DRY_RUN off.
-      lines.push(`<tr><td>${c.code}</td><td>${rows.length}</td><td style="text-align:right">${rupees(gross)}</td><td style="text-align:right">${rupees(adjustments)}</td><td style="text-align:right">${rupees(tds)}</td><td style="text-align:right">${carryOut ? `carried ${rupees(carryOut)}` : rupees(net)}</td></tr>`);
+      const net = gross + adjustments + carryIn - tds;
+
+      let holdReason = null;
+      if (net < config.payouts.minPayoutPaise) holdReason = 'under_minimum';
+      else if (live && c.payout_hold_until && new Date(c.payout_hold_until) > now) holdReason = 'details_changed';
+      else if (live && !c.rzp_fund_account_id) holdReason = 'no_fund_account';
+      else if (c.status === 'paused') holdReason = 'paused';
+
+      const reference = `${runId}-${c.id}`;
+      const status = !live ? 'dry_run' : holdReason ? 'carried' : 'queued';
+      const carryOut = status === 'carried' || (!live && holdReason) ? net : 0;
+
+      const payoutId = await tx(async (client) => {
+        const ins = await client.query(
+          `INSERT INTO payouts (run_id, creator_id, gross_paise, adjustments_paise, carry_in_paise, tds_paise, net_paise, carry_out_paise, status, fy, reference_id, mode)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (reference_id) DO NOTHING RETURNING id`,
+          [runId, c.id, gross, adjustments, carryIn, tds, net, carryOut, status, fy, live ? reference : null,
+            live && !holdReason ? rzp.payoutMode(c.payout_method, net) : null]);
+        if (!ins.rowCount) return null; // already exists: never pay twice
+        const id = ins.rows[0].id;
+        if (live) {
+          // Earnings and adjustments are credited into this statement whether paid now or carried.
+          if (rows.length) await client.query('UPDATE attributions SET paid_in_payout_id=$2 WHERE order_id = ANY($1)', [rows.map((r) => r.order_id), id]);
+          if (adj.length) await client.query('UPDATE adjustments SET applied_in_payout_id=$2 WHERE id = ANY($1)', [adj.map((a) => a.id), id]);
+        }
+        return id;
+      });
+      if (!payoutId) continue;
+
+      totals.creators++; totals.gross += gross; totals.tds += tds;
+      if (holdReason) { totals.carried += net; if (holdReason !== 'under_minimum') totals.held++; }
+
+      let outcome = holdReason ? `carried (${holdReason.replace(/_/g, ' ')})` : live ? 'queued' : 'would pay';
+      if (live && !holdReason) {
+        try {
+          const p = await rzp.createPayout({ fundAccountId: c.rzp_fund_account_id, amountPaise: net, method: c.payout_method, referenceId: reference, label });
+          await q('UPDATE payouts SET rzp_payout_id=$2, status=$3, utr=$4 WHERE id=$1',
+            [payoutId, p.id, ['processed', 'processing', 'queued', 'pending'].includes(p.status) ? (p.status === 'pending' ? 'queued' : p.status) : 'processing', p.utr || null]);
+          totals.paid += net;
+          outcome = p.status;
+        } catch (e) {
+          if (e.status && e.status >= 400 && e.status < 500) {
+            // RazorpayX refused it: no money moved. Put everything back for the next run.
+            await tx(async (client) => {
+              await client.query(`UPDATE payouts SET status='failed', failure_reason=$2, carry_out_paise=0 WHERE id=$1`, [payoutId, e.message.slice(0, 300)]);
+              await client.query('UPDATE attributions SET paid_in_payout_id=NULL WHERE paid_in_payout_id=$1', [payoutId]);
+              await client.query('UPDATE adjustments SET applied_in_payout_id=NULL WHERE applied_in_payout_id=$1', [payoutId]);
+            });
+            outcome = 'refused by RazorpayX';
+          } else {
+            // Unknown outcome (timeout, 5xx): leave it marked so it can't be paid twice; Rohan checks the dashboard.
+            await q(`UPDATE payouts SET status='processing', failure_reason=$2 WHERE id=$1`, [payoutId, `Outcome unknown: ${e.message}`.slice(0, 300)]);
+            outcome = 'outcome unknown, check RazorpayX';
+          }
+          totals.failures++;
+        }
+      }
+
+      if (live) {
+        await emails.statement(c.email, {
+          name: c.name, periodLabel: period, rows, gross, adjustments, carryIn, tds, net,
+          carryOut: holdReason ? net : 0, dryRun: false, testMode,
+        });
+      }
+      lines.push(`<tr><td>${c.code}</td><td>${rows.length}</td><td style="text-align:right">${rupees(gross)}</td><td style="text-align:right">${rupees(adjustments + carryIn)}</td><td style="text-align:right">${rupees(tds)}</td><td style="text-align:right">${rupees(net)}</td><td>${outcome}</td></tr>`);
     } catch (e) {
       totals.failures++;
       log(`payout run failed for creator ${c.id}: ${e.message}`);
+      lines.push(`<tr><td>${c.code}</td><td colspan="6">Error: ${String(e.message).slice(0, 200)}</td></tr>`);
     }
   }
   await q(`UPDATE payout_runs SET status='finished', totals=$2, finished_at=now() WHERE run_id=$1`, [runId, totals]);
-  await emails.ownerDigest(`Creator statements ${runId} (DRY_RUN)`,
-    `<p>No money was sent. This is what the run would have paid.</p>
-     <p>Creators with earnings: ${totals.creators}<br>Earned: ${rupees(totals.gross)}<br>TDS: ${rupees(totals.tds)}<br>Would pay: ${rupees(totals.net)}<br>Carried forward (under ₹500): ${rupees(totals.carried)}<br>Failures: ${totals.failures}</p>
-     <table cellpadding="4" style="font-size:13px;border-collapse:collapse"><tr><th align="left">Code</th><th>Orders</th><th>Earned</th><th>Adjustments</th><th>TDS</th><th>Pay</th></tr>${lines.join('')}</table>
-     <p>Creators were not emailed. Once you are happy with these numbers and payouts are built, switch DRY_RUN off in Railway.</p>`);
+  const modeLabel = !live ? 'DRY_RUN, no money sent' : testMode ? 'RazorpayX TEST MODE' : 'LIVE';
+  await emails.ownerDigest(`Creator payouts ${runId} (${modeLabel})`,
+    `<p>Creators with a statement: ${totals.creators}<br>Earned: ${rupees(totals.gross)}<br>TDS withheld: ${rupees(totals.tds)}<br>
+     ${live ? 'Sent to RazorpayX' : 'Would pay'}: ${rupees(live ? totals.paid : totals.gross - totals.tds - totals.carried)}<br>
+     Carried forward: ${rupees(totals.carried)} (${totals.held} held for details change, pause or missing account)<br>Problems: ${totals.failures}</p>
+     <table cellpadding="4" style="font-size:13px;border-collapse:collapse"><tr><th align="left">Code</th><th>Orders</th><th>Earned</th><th>Adj. and carry</th><th>TDS</th><th>Net</th><th>Outcome</th></tr>${lines.join('')}</table>
+     ${!live ? '<p>Creators were not emailed. When these numbers look right, switch DRY_RUN off in Railway.</p>' : ''}`);
   return { runId, totals };
+}
+
+/** Quarterly: TDS details for the CA (deductee PAN, name, amount credited, TDS, date). Emailed to Rohan as a CSV. */
+export async function tdsReport(now = new Date()) {
+  const ist = new Date(now.getTime() + 5.5 * 3600000);
+  // The quarter that just ended.
+  const m = ist.getUTCMonth();
+  const qEnd = new Date(Date.UTC(ist.getUTCFullYear(), m - (m % 3), 1));
+  const qStart = new Date(Date.UTC(qEnd.getUTCFullYear(), qEnd.getUTCMonth() - 3, 1));
+  const rows = (await q(
+    `SELECT p.created_at, p.gross_paise, p.tds_paise, p.run_id, c.pan_enc, c.pan_name, c.name
+     FROM payouts p JOIN creators c ON c.id = p.creator_id
+     WHERE p.status NOT IN ('dry_run','failed') AND p.run_id NOT LIKE 'test-%' AND p.run_id NOT LIKE 'dry-%'
+       AND p.created_at >= $1 AND p.created_at < $2 ORDER BY p.created_at`, [qStart.toISOString(), qEnd.toISOString()])).rows;
+  const csvCell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const lines = ['Deductee PAN,Name as on PAN,Amount credited (INR),TDS (INR),Date of credit,Section,Run'];
+  for (const r of rows) {
+    lines.push([decrypt(r.pan_enc), r.pan_name || r.name, (r.gross_paise / 100).toFixed(2), (r.tds_paise / 100).toFixed(2),
+      new Date(r.created_at).toISOString().slice(0, 10), config.tds.sectionLabel, r.run_id].map(csvCell).join(','));
+  }
+  const label = `${qStart.toISOString().slice(0, 7)} to ${new Date(qEnd.getTime() - 86400000).toISOString().slice(0, 7)}`;
+  await emails.ownerDigestWithAttachment(`Creator TDS for the CA, ${label}`,
+    `<p>${rows.length} credits this quarter. The attached CSV has each creator's PAN, so forward it only to your CA.</p>`,
+    { filename: `creator-tds-${qStart.toISOString().slice(0, 7)}.csv`, content: lines.join('\n') });
+  return { rows: rows.length, label };
 }
 
 /** Weekly owner summary of sign-ups, orders and the halo estimate. */

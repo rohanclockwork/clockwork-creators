@@ -14,6 +14,7 @@ const map = {
   recheck: jobs.recheckCreators,
   posts: jobs.scanPosts,
   summary: jobs.weeklySummary,
+  tds: jobs.tdsReport,
   webhooks: () => subscribeWebhooks(config.baseUrl),
 };
 if (!map[name]) { console.log(`Jobs: ${Object.keys(map).join(', ')}`); process.exit(1); }

@@ -2,8 +2,7 @@
 
 The service behind the Clockwork Creator Programme: Instagram-verified sign-up, creator codes, order attribution, the ₹300 launch offer, tiers, fraud checks and statements.
 
-**Phase 1 (this release):** everything except moving money. `DRY_RUN=true` is enforced: payout runs calculate every creator's statement and email them to Rohan only. Creators are not emailed statements and nothing is marked paid.
-**Phase 2:** RazorpayX contacts, fund-account validation, live payouts, payout webhooks, quarterly TDS export.
+**Payouts:** RazorpayX. With `DRY_RUN=true` (the default) payout runs only calculate, and Rohan alone gets the statements. With `DRY_RUN=false` and **test** keys (`rzp_test_…`) the whole flow runs against RazorpayX test mode (run IDs start `test-`). With live keys, money moves. Each payout's reference and idempotency key is `<runId>-<creatorId>`, and a run for a period that already exists is refused.
 
 ## How it works
 
@@ -104,9 +103,20 @@ Scheduled inside the service (Asia/Kolkata). Run any by hand with `npm run job -
 
 A payout run for a period that already exists is refused (never pay twice). `npm run job -- payouts --force` re-runs a dry run.
 
-## Before switching DRY_RUN off
+## RazorpayX set-up
 
-Phase 2 must be built and tested in RazorpayX test mode first; the payout code refuses to run with `DRY_RUN=false` until then. RazorpayX also needs Railway's static outbound IP add-on, with that IP allow-listed in RazorpayX.
+1. Railway → creators-app → Settings → Networking → enable **Static Outbound IPs** (Pro plan). Add every IP shown to RazorpayX's IP allowlist.
+2. RazorpayX dashboard, **test mode** first: generate API keys → `RAZORPAYX_KEY_ID`, `RAZORPAYX_KEY_SECRET`. Business account number → `RAZORPAYX_ACCOUNT_NUMBER` (different in test and live mode).
+3. RazorpayX webhooks: URL `https://creators.clockworkrituals.com/webhooks/razorpayx`, events `payout.processed`, `payout.failed`, `payout.reversed`, `payout.rejected`, `payout.queued`, `payout.initiated`; a secret → `RAZORPAYX_WEBHOOK_SECRET`.
+4. `RAZORPAYX_VALIDATE_ACCOUNTS=true` only if your RazorpayX account supports Account Validation (penny drop). RazorpayX documents it as unavailable in test mode and limited to RazorpayX Lite. With it on, a creator's account name must match their PAN name (`NAME_MATCH_MIN`, default 0.6).
+
+## Going live with payouts
+
+1. Set `DRY_RUN=false` with **test** keys. Sign up yourself as a creator, place and deliver a test order, run `npm run job -- payouts`, and check the payout appears in RazorpayX test mode, the webhook stores a UTR, and the statement email arrives.
+2. Swap to live keys and the live account number. Do a ₹1 live payout to your own UPI (your own sign-up, with `MIN_PAYOUT_PAISE=100` for that one run, then back to `50000`).
+3. Keep the business account funded: payouts queue when the balance is low (`queue_if_low_balance`), and RazorpayX's dashboard low-balance alert covers this.
+
+Returned payouts (`payout.failed` / `payout.reversed`) put the money back on the creator's balance, hold further payouts and email the creator. A changed UPI or bank account waits 72 hours before it is paid. Every quarter (7 Jan/Apr/Jul/Oct) Rohan gets a CSV of PAN, name, amount credited and TDS for the CA (`npm run job -- tds`).
 
 ## Check with the CA before launch
 

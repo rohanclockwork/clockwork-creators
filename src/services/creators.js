@@ -3,6 +3,7 @@ import { q, tx, audit } from '../db.js';
 import { codeTaken, createCreatorDiscount, creatorLinks, gql } from '../integrations/shopify.js';
 import { emails } from '../integrations/email.js';
 import { sign, decrypt } from '../lib/crypto.js';
+import { setupFundAccount } from './payouts.js';
 
 const PROFANITY = ['fuck', 'shit', 'bitch', 'chut', 'gand', 'lund', 'bsdk', 'madar', 'behen', 'randi', 'sex', 'porn'];
 
@@ -78,6 +79,15 @@ export async function activate(creatorId) {
     [c.id, code, discountId],
   )).rows[0];
   await audit('system', 'creator', c.id, 'activated', { status: c.status }, { status: 'active', code });
+
+  try {
+    const fa = await setupFundAccount(updated);
+    if (!fa.ok) {
+      await q(`UPDATE creators SET payout_hold_until = now() + interval '3650 days', payments_held_reason=$2 WHERE id=$1`, [c.id, fa.reason]);
+    }
+  } catch (e) {
+    await emails.ownerDigest('Creator payout account not set up', `<p>Creator ${code}: ${e.message}. Their earnings carry forward until this is fixed; the next payout run retries.</p>`);
+  }
 
   if (updated.level === 'spotlight' && updated.kit_address_enc && !updated.kit_order_id) {
     try {

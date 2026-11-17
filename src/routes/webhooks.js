@@ -3,6 +3,8 @@ import { config } from '../config.js';
 import { shopifyHmacValid } from '../lib/crypto.js';
 import { getOrder } from '../integrations/shopify.js';
 import { processOrder } from '../services/orders.js';
+import { webhookValid } from '../integrations/razorpayx.js';
+import { handlePayoutEvent } from '../services/payouts.js';
 
 export const webhooks = express.Router();
 
@@ -19,5 +21,17 @@ webhooks.post('/webhooks/shopify', express.raw({ type: '*/*', limit: '2mb' }), a
     if (order) await processOrder(order);
   } catch (e) {
     console.error('webhook processing failed', e.message);
+  }
+});
+
+webhooks.post('/webhooks/razorpayx', express.raw({ type: '*/*', limit: '1mb' }), async (req, res) => {
+  if (!webhookValid(req.body, req.get('X-Razorpay-Signature'))) return res.sendStatus(401);
+  try {
+    const event = JSON.parse(req.body.toString('utf8'));
+    await handlePayoutEvent(event);
+    res.sendStatus(200);
+  } catch (e) {
+    console.error('razorpayx webhook failed', e.message);
+    res.sendStatus(500); // RazorpayX retries
   }
 });

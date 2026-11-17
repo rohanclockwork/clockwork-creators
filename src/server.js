@@ -46,4 +46,5 @@ if (config.schedulerEnabled) {
   cron.schedule('0 10 * * 1', safe('payouts-weekly', async () => (new Date() <= new Date(config.commission.campaignEndsAt) ? jobs.payoutRun() : { skipped: 'campaign over' })), tz);
   cron.schedule('0 10 5 * *', safe('payouts-monthly', async () => (new Date() > new Date(config.commission.campaignEndsAt) ? jobs.payoutRun() : { skipped: 'weekly during campaign' })), tz);
   cron.schedule('0 9 * * 1', safe('summary', jobs.weeklySummary), tz); // Monday 09:00
+  cron.schedule('30 9 7 1,4,7,10 *', safe('tds', jobs.tdsReport), tz); // quarterly TDS CSV for the CA
 }

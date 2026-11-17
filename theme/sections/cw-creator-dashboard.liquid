@@ -1,0 +1,256 @@
+{%- comment -%}
+  CLOCKWORK CREATORS — dashboard (/pages/creator-dashboard).
+  Sign-in is by emailed link (?t=…), exchanged for a 30-day session kept in this browser.
+{%- endcomment -%}
+
+{%- assign api = section.settings.api_url | default: 'https://creators.clockworkrituals.com' -%}
+
+<style>
+  .cd-page { --cd-black:#0a0a0a; --cd-near:#111; --cd-char:#1a1a1a; --cd-dark:#222; --cd-mid:#6b6b6b; --cd-light:#9a9a9a; --cd-off:#ddd; --cd-white:#fff; --cd-mint:#8ACDB2;
+    font-family:'Helvetica Neue',Helvetica,Arial,sans-serif; color:var(--cd-off); background:var(--cd-black); -webkit-font-smoothing:antialiased; line-height:1.55; min-height:60vh; }
+  .cd-page *{ box-sizing:border-box; }
+  .cd-wrap{ max-width:880px; margin:0 auto; padding:56px 24px 72px; }
+  .cd-kicker{ font-size:11px; letter-spacing:.35em; text-transform:uppercase; color:var(--cd-light); text-align:center; margin:0 0 14px; }
+  .cd-title{ font-size:clamp(28px,5vw,44px); font-weight:200; letter-spacing:.1em; text-transform:uppercase; color:var(--cd-white); text-align:center; margin:0 0 10px; }
+  .cd-center{ text-align:center; color:var(--cd-light); font-size:14px; }
+  .cd-btn{ display:inline-block; padding:13px 40px; background:var(--cd-white); color:var(--cd-black)!important; text-decoration:none; font-size:11px; font-weight:600; letter-spacing:.2em; text-transform:uppercase; border:0; cursor:pointer; }
+  .cd-btn.is-ghost{ background:transparent; color:var(--cd-off)!important; border:1px solid rgba(255,255,255,.18); }
+  .cd-btn[disabled]{ opacity:.5; }
+  .cd-form{ max-width:420px; margin:28px auto 0; }
+  .cd-form label{ display:block; font-size:10px; font-weight:600; letter-spacing:.2em; text-transform:uppercase; color:var(--cd-light); margin:18px 0 8px; }
+  .cd-form input, .cd-form select{ width:100%; padding:13px 14px; background:var(--cd-near); border:1px solid rgba(255,255,255,.12); color:var(--cd-white); font-size:15px; border-radius:0; font-family:inherit; }
+  .cd-form input:focus{ outline:none; border-color:var(--cd-mint); }
+  .cd-msg{ border:1px solid rgba(255,255,255,.1); padding:14px 16px; font-size:13px; margin:18px auto; max-width:560px; }
+  .cd-msg.is-ok{ border-color:rgba(138,205,178,.5); color:#cfeee1; }
+  .cd-msg.is-error{ border-color:#c0574b; color:#f2c4be; }
+  .cd-code{ display:inline-block; background:var(--cd-char); padding:10px 28px; font-size:18px; font-weight:600; letter-spacing:.18em; color:var(--cd-white); border:1px solid rgba(255,255,255,.1); cursor:pointer; margin-top:6px; }
+  .cd-tag{ display:inline-block; font-size:10px; font-weight:600; letter-spacing:.25em; text-transform:uppercase; color:var(--cd-mint); padding:5px 16px; border:1px solid rgba(138,205,178,.35); margin-top:14px; }
+  .cd-stats{ display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:rgba(255,255,255,.05); margin:40px 0; }
+  .cd-stat{ background:var(--cd-black); padding:26px 16px; text-align:center; }
+  .cd-stat b{ display:block; font-size:28px; font-weight:200; color:var(--cd-white); margin-bottom:4px; }
+  .cd-stat span{ font-size:9px; letter-spacing:.2em; text-transform:uppercase; color:var(--cd-mid); }
+  .cd-h{ text-align:center; font-size:10px; font-weight:600; letter-spacing:.3em; text-transform:uppercase; color:var(--cd-light); margin:48px 0 20px; }
+  .cd-divider{ width:36px; height:1px; background:rgba(255,255,255,.12); margin:48px auto 0; }
+  .cd-progress{ max-width:620px; margin:0 auto; }
+  .cd-bar{ height:3px; background:var(--cd-dark); margin:14px 0 10px; }
+  .cd-bar i{ display:block; height:100%; background:var(--cd-white); width:0; transition:width .8s cubic-bezier(.23,1,.32,1); }
+  .cd-small{ font-size:12px; color:var(--cd-mid); }
+  .cd-link{ display:flex; gap:10px; align-items:center; border-bottom:1px solid rgba(255,255,255,.06); padding:14px 0; }
+  .cd-link div{ flex:1; min-width:0; }
+  .cd-link strong{ display:block; font-size:12px; color:var(--cd-white); font-weight:500; margin-bottom:4px; }
+  .cd-link code{ display:block; font-size:12px; color:var(--cd-light); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-family:inherit; }
+  .cd-copy{ font-size:10px; letter-spacing:.15em; text-transform:uppercase; background:transparent; color:var(--cd-off); border:1px solid rgba(255,255,255,.18); padding:8px 14px; cursor:pointer; }
+  .cd-table{ width:100%; border-collapse:collapse; font-size:13px; }
+  .cd-table th{ text-align:left; font-size:9px; letter-spacing:.2em; text-transform:uppercase; color:var(--cd-mid); font-weight:600; padding:10px 6px; border-bottom:1px solid rgba(255,255,255,.08); }
+  .cd-table td{ padding:12px 6px; border-bottom:1px solid rgba(255,255,255,.04); color:var(--cd-off); }
+  .cd-table .r{ text-align:right; }
+  .cd-scroll{ overflow-x:auto; }
+  .cd-row{ display:flex; justify-content:space-between; gap:20px; padding:14px 0; border-bottom:1px solid rgba(255,255,255,.06); font-size:13px; }
+  .cd-row span:first-child{ color:var(--cd-light); } .cd-row span:last-child{ color:var(--cd-white); text-align:right; }
+  .cd-rules{ font-size:13px; color:var(--cd-light); max-width:620px; margin:0 auto; }
+  .cd-rules p{ margin:0 0 10px; }
+  .cd-hide{ display:none!important; }
+  .cd-hp{ position:absolute; left:-9999px; }
+  @media (max-width:720px){ .cd-stats{ grid-template-columns:repeat(2,1fr); } }
+</style>
+
+<div class="cd-page" id="cd-page" data-api="{{ api | escape }}">
+
+  {%- comment -%} ══════ SIGN IN ══════ {%- endcomment -%}
+  <div id="cd-signin" class="cd-wrap cd-hide">
+    <p class="cd-kicker">Clockwork Creators</p>
+    <h1 class="cd-title">Sign in</h1>
+    <p class="cd-center">Enter the email you joined with. We send you a link that works for 15 minutes.</p>
+    <div id="cd-signin-msg" class="cd-msg cd-hide"></div>
+    <form class="cd-form" id="cd-login">
+      <input class="cd-hp" type="text" name="website" tabindex="-1" autocomplete="off">
+      <label for="cd-email">Email</label><input id="cd-email" type="email" name="email" autocomplete="email" required>
+      <p style="text-align:center;margin-top:24px;"><button class="cd-btn" type="submit">Send my link</button></p>
+    </form>
+    <p class="cd-center cd-small" style="margin-top:28px;">Not a creator yet? <a href="/pages/creators" style="color:#ddd;">Join Clockwork Creators</a></p>
+  </div>
+
+  {%- comment -%} ══════ LOADING ══════ {%- endcomment -%}
+  <div id="cd-loading" class="cd-wrap"><p class="cd-center">Loading your dashboard</p></div>
+
+  {%- comment -%} ══════ DASHBOARD ══════ {%- endcomment -%}
+  <div id="cd-dash" class="cd-wrap cd-hide">
+    <div id="cd-banner" class="cd-msg cd-hide"></div>
+    <p class="cd-kicker">Clockwork Creators</p>
+    <h1 class="cd-title" id="cd-name"></h1>
+    <div style="text-align:center;">
+      <div class="cd-small" style="letter-spacing:.2em;text-transform:uppercase;margin-top:6px;">Your code</div>
+      <div class="cd-code" id="cd-code" title="Copy"></div><br>
+      <span class="cd-tag" id="cd-tier"></span>
+    </div>
+
+    <div class="cd-stats">
+      <div class="cd-stat"><b id="cd-s-new">0</b><span>New customers</span></div>
+      <div class="cd-stat"><b id="cd-s-earned">₹0</b><span>Earned</span></div>
+      <div class="cd-stat"><b id="cd-s-pending">₹0</b><span id="cd-s-pending-l">Pending</span></div>
+      <div class="cd-stat"><b id="cd-s-clicks">0</b><span>Clicks, 30 days</span></div>
+    </div>
+
+    <div class="cd-progress" id="cd-progress">
+      <div class="cd-small" id="cd-progress-text"></div>
+      <div class="cd-bar"><i id="cd-progress-bar"></i></div>
+      <div class="cd-small">New customers earn ₹300 each until 30 June 2027. Repeat orders earn your tier percentage.</div>
+    </div>
+
+    <p class="cd-h">Your links</p>
+    <div style="max-width:620px;margin:0 auto;" id="cd-links"></div>
+
+    <p class="cd-h">Recent orders</p>
+    <div class="cd-scroll"><table class="cd-table"><thead><tr><th>Order</th><th>Date</th><th>Basis</th><th>Status</th><th class="r">Earnings</th></tr></thead><tbody id="cd-orders"></tbody></table></div>
+
+    <p class="cd-h">Payments</p>
+    <div class="cd-scroll"><table class="cd-table"><thead><tr><th>Period</th><th>Status</th><th class="r">Tax deducted</th><th class="r">Amount</th><th>UTR</th></tr></thead><tbody id="cd-payouts"></tbody></table></div>
+
+    <p class="cd-h">Your details</p>
+    <div style="max-width:620px;margin:0 auto;">
+      <div class="cd-row"><span>PAN</span><span id="cd-pan"></span></div>
+      <div class="cd-row"><span>Payout account</span><span id="cd-payout"></span></div>
+      <div id="cd-hold" class="cd-small cd-hide" style="margin-top:10px;"></div>
+      <p style="margin-top:18px;"><button class="cd-btn is-ghost" type="button" id="cd-change-btn">Change payout details</button></p>
+      <form class="cd-form cd-hide" id="cd-change" style="max-width:none;">
+        <div id="cd-change-msg" class="cd-msg cd-hide" style="max-width:none;"></div>
+        <label for="cd-method">Payout method</label><select id="cd-method" name="payout_method"><option value="upi">UPI</option><option value="bank">Bank account</option></select>
+        <div id="cd-upi"><label for="cd-vpa">UPI ID</label><input id="cd-vpa" type="text" name="vpa"></div>
+        <div id="cd-bank" class="cd-hide"><label for="cd-acct">Bank account number</label><input id="cd-acct" type="text" name="account" inputmode="numeric">
+          <label for="cd-ifsc">IFSC</label><input id="cd-ifsc" type="text" name="ifsc"></div>
+        <p class="cd-small" style="margin-top:12px;">For your security we email you about the change and wait 72 hours before paying to a new account.</p>
+        <p><button class="cd-btn" type="submit">Save</button></p>
+      </form>
+    </div>
+
+    <p class="cd-h">The rules, in short</p>
+    <div class="cd-rules">
+      <p><strong style="color:#fff">Disclose every post.</strong> Use Instagram's Paid partnership label, or #ad or #sponsored in the first lines of the caption.</p>
+      <p><strong style="color:#fff">You can say:</strong> Clockwork Daily helps remineralise enamel. It contains 10% nanoXIM·CarePaste, made by FLUIDINOVA. Our toothpastes are fluoride-free and SLS-free.</p>
+      <p><strong style="color:#fff">Never say:</strong> repairs, rebuilds, heals, reverses or cures; non-toxic, chemical free, 100% natural, completely safe, safe to swallow; clinically proven, dentist recommended, patented; best or India's #1; any nano-hydroxyapatite percentage; anything against fluoride; any mineral claim for Kids.</p>
+      <p>Full details are in the <a href="/pages/creator-terms" style="color:#ddd;">Creator Terms</a>. Questions: <a href="mailto:partners@clockworkrituals.com" style="color:#ddd;">partners@clockworkrituals.com</a></p>
+    </div>
+
+    <p style="text-align:center;margin-top:48px;"><button class="cd-btn is-ghost" type="button" id="cd-logout">Sign out</button></p>
+  </div>
+</div>
+
+<script>
+(function(){
+  var API = document.getElementById('cd-page').getAttribute('data-api');
+  var KEY = 'cw_creator_session';
+  var $ = function(id){ return document.getElementById(id); };
+  var esc = function(s){ var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; };
+  var inr = function(p){ return '₹' + (Number(p || 0) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 }); };
+  var store = { get: function(){ try { return localStorage.getItem(KEY); } catch(e){ return null; } },
+                set: function(v){ try { localStorage.setItem(KEY, v); } catch(e){} },
+                clear: function(){ try { localStorage.removeItem(KEY); } catch(e){} } };
+  var view = function(id){ ['cd-signin','cd-loading','cd-dash'].forEach(function(x){ $(x).classList.toggle('cd-hide', x !== id); }); };
+  var qs = new URLSearchParams(location.search);
+
+  function signin(msg, ok){
+    view('cd-signin');
+    if (msg) { var m = $('cd-signin-msg'); m.textContent = msg; m.className = 'cd-msg ' + (ok ? 'is-ok' : 'is-error'); }
+  }
+
+  function copy(text, btn){
+    var done = function(){ if (btn) { var t = btn.textContent; btn.textContent = 'Copied'; setTimeout(function(){ btn.textContent = t; }, 1500); } };
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(done); else { var a = document.createElement('textarea'); a.value = text; document.body.appendChild(a); a.select(); document.execCommand('copy'); a.remove(); done(); }
+  }
+
+  function render(d){
+    $('cd-name').textContent = d.name || '';
+    $('cd-code').textContent = d.code;
+    $('cd-code').onclick = function(){ copy(d.code); };
+    $('cd-tier').textContent = d.tier + (d.level === 'spotlight' ? ' · Spotlight' : '');
+    $('cd-s-new').textContent = d.stats.newCustomers;
+    $('cd-s-earned').textContent = inr(d.stats.earnedPaise);
+    $('cd-s-pending').textContent = inr(d.stats.pendingPaise);
+    $('cd-s-pending-l').textContent = 'Pending, ' + d.stats.pendingOrders + ' order' + (d.stats.pendingOrders === 1 ? '' : 's');
+    $('cd-s-clicks').textContent = d.stats.clicks30d;
+    if (d.next) {
+      $('cd-progress-text').textContent = d.monthOrders + ' of ' + d.next.minOrders + ' qualifying orders this month to reach ' + d.next.label + ' (' + d.next.ratePercent + '% on repeat orders) from next month.';
+      setTimeout(function(){ $('cd-progress-bar').style.width = Math.min(100, d.monthOrders / d.next.minOrders * 100) + '%'; }, 100);
+    } else { $('cd-progress-text').textContent = 'You are at the top tier.'; $('cd-progress-bar').style.width = '100%'; }
+
+    var links = [['Short link', d.links.short], ['Clockwork Daily', d.links.daily], ['The whole range', d.links.shop]];
+    $('cd-links').innerHTML = links.map(function(l, i){ return '<div class="cd-link"><div><strong>' + esc(l[0]) + '</strong><code>' + esc(l[1]) + '</code></div><button class="cd-copy" type="button" data-i="' + i + '">Copy</button></div>'; }).join('');
+    Array.prototype.forEach.call($('cd-links').querySelectorAll('button'), function(b){ b.onclick = function(){ copy(links[b.getAttribute('data-i')][1], b); }; });
+
+    $('cd-orders').innerHTML = d.orders.length ? d.orders.map(function(o){
+      return '<tr><td>' + esc(o.name) + '</td><td>' + new Date(o.date).toLocaleDateString('en-GB') + '</td><td>' + esc(o.basis) + '</td><td>' + esc(o.status) + '</td><td class="r">' + inr(o.earnedPaise) + '</td></tr>';
+    }).join('') : '<tr><td colspan="5" style="color:#6b6b6b">No orders yet. Share your link to get started.</td></tr>';
+    $('cd-payouts').innerHTML = d.payouts.length ? d.payouts.map(function(p){
+      return '<tr><td>' + esc(p.period) + '</td><td>' + esc(p.status) + '</td><td class="r">' + inr(p.tdsPaise) + '</td><td class="r">' + inr(p.amountPaise) + '</td><td>' + esc(p.utr || '') + '</td></tr>';
+    }).join('') : '<tr><td colspan="5" style="color:#6b6b6b">No payments yet.</td></tr>';
+
+    $('cd-pan').textContent = 'Ending ' + (d.payout.panLast4 || '');
+    $('cd-payout').textContent = d.payout.method + ' ending ' + (d.payout.last4 || '');
+    if (d.payout.holdUntil) {
+      $('cd-hold').textContent = d.payout.holdIndefinite ? 'Payments are on hold until you update your payout details.' : 'Payments to this account start after ' + new Date(d.payout.holdUntil).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + '.';
+      $('cd-hold').classList.remove('cd-hide');
+    }
+    if (d.status === 'paused') { var b = $('cd-banner'); b.textContent = 'Your participation is paused: ' + (d.pausedReason || 'please check your email') + '.'; b.className = 'cd-msg is-error'; }
+    else if (qs.get('welcome')) { var w = $('cd-banner'); w.textContent = 'Your email is confirmed and your code is live. Your welcome email has your links and the rules.'; w.className = 'cd-msg is-ok'; }
+    view('cd-dash');
+  }
+
+  function load(){
+    var token = store.get();
+    if (!token) return signin(qs.get('result') === 'already_joined' ? 'This Instagram account has already joined. Sign in with your email.' : null, true);
+    view('cd-loading');
+    fetch(API + '/api/me', { headers: { Authorization: 'Bearer ' + token } })
+      .then(function(r){ if (r.status === 401) { store.clear(); signin('Please sign in again.'); return null; } return r.json(); })
+      .then(function(d){ if (d) render(d); })
+      .catch(function(){ signin('We could not load your dashboard. Please try again in a minute.'); });
+  }
+
+  // Arriving from an email link: exchange it for a session, then tidy the address bar.
+  var t = qs.get('t');
+  if (t) {
+    view('cd-loading');
+    fetch(API + '/api/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ t: t }) })
+      .then(function(r){ return r.json().then(function(d){ return { ok: r.ok, d: d }; }); })
+      .then(function(x){
+        var keep = qs.get('welcome') ? '?welcome=1' : '';
+        history.replaceState(null, '', location.pathname + keep);
+        if (x.ok && x.d.session) { store.set(x.d.session); load(); } else signin('That sign-in link has expired. Ask for a new one below.');
+      }).catch(function(){ signin('We could not sign you in. Please try again.'); });
+  } else load();
+
+  $('cd-login').addEventListener('submit', function(e){
+    e.preventDefault();
+    var f = e.target;
+    fetch(API + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: f.email.value, website: f.website.value }) })
+      .then(function(){ signin('If that address belongs to a Clockwork creator, a sign-in link is on its way.', true); f.reset(); })
+      .catch(function(){ signin('We could not send the link. Please try again in a minute.'); });
+  });
+
+  $('cd-logout').onclick = function(){ store.clear(); signin('You are signed out.', true); };
+  $('cd-change-btn').onclick = function(){ $('cd-change').classList.toggle('cd-hide'); };
+  $('cd-method').onchange = function(e){ var bank = e.target.value === 'bank'; $('cd-bank').classList.toggle('cd-hide', !bank); $('cd-upi').classList.toggle('cd-hide', bank); };
+  $('cd-change').addEventListener('submit', function(e){
+    e.preventDefault();
+    var f = e.target, msg = $('cd-change-msg');
+    fetch(API + '/api/payout-details', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + store.get() },
+      body: JSON.stringify({ payout_method: f.payout_method.value, vpa: f.vpa.value, account: f.account.value, ifsc: f.ifsc.value }) })
+      .then(function(r){ return r.json().then(function(d){ return { ok: r.ok, d: d }; }); })
+      .then(function(x){
+        if (x.ok) { f.reset(); f.classList.add('cd-hide'); load(); return; }
+        msg.textContent = (x.d.errors || ['Something went wrong.']).join(' '); msg.className = 'cd-msg is-error';
+      }).catch(function(){ msg.textContent = 'We could not save that. Please try again.'; msg.className = 'cd-msg is-error'; });
+  });
+})();
+</script>
+
+{% schema %}
+{
+  "name": "Creator dashboard",
+  "tag": "section",
+  "class": "cw-creator-dashboard-section",
+  "settings": [
+    { "type": "text", "id": "api_url", "label": "Service address", "default": "https://creators.clockworkrituals.com" }
+  ],
+  "presets": [{ "name": "Creator dashboard" }]
+}
+{% endschema %}

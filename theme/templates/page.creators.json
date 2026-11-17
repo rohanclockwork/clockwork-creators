@@ -1,0 +1,12 @@
+{
+  "sections": {
+    "main": {
+      "type": "cw-creators",
+      "settings": {
+        "api_url": "https://creators.clockworkrituals.com",
+        "brand_mark": "shopify://shop_images/Clockwork_brand_Mark.pdf_3000_x_2842_px_3000_x_3000_px_1999_x_1999_px.png"
+      }
+    }
+  },
+  "order": ["main"]
+}

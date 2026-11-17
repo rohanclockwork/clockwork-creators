@@ -1,0 +1,6 @@
+{
+  "sections": {
+    "main": { "type": "cw-creator-dashboard", "settings": { "api_url": "https://creators.clockworkrituals.com" } }
+  },
+  "order": ["main"]
+}
